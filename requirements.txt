@@ -1,0 +1,7 @@
+pandas==2.3.1
+requests==2.32.4
+matplotlib==3.10.3
+seaborn==0.13.2
+plotly==6.2.0
+jupyterlab==4.4.5
+dash==3.1.1
