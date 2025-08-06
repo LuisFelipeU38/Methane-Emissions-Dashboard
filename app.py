@@ -2,6 +2,7 @@ import dash
 from dash import dcc, html, Input, Output
 import pandas as pd
 import plotly.graph_objects as go
+import numpy as np
 from utils import load_update_table
 
 # Start the Dash app
@@ -9,11 +10,9 @@ app = dash.Dash(__name__)
 server = app.server
 app.title = "Methane Emissions Dashboard"
 
-# Load emissions and facility data
 emissions_df = load_update_table("ghg.EF_W_EMISSIONS_SOURCE_GHG", folder='epa')
 facilities_df = load_update_table("ghg.rlps_ghg_emitter_facilities", folder='epa')
 
-# Data cleaning: only keep relevant columns and drop rows with NaN in key fields
 columns_required = [
     'facility_id',
     'reporting_year',
@@ -25,29 +24,23 @@ columns_required = [
 emissions_df = emissions_df[columns_required].copy()
 emissions_df.dropna(subset=['reporting_year', 'industry_segment', 'total_reported_ch4_emissions'], inplace=True)
 
-# Convert to appropriate dtypes
 emissions_df['reporting_year'] = emissions_df['reporting_year'].astype(int)
 emissions_df['total_reported_ch4_emissions'] = emissions_df['total_reported_ch4_emissions'].astype(float)
 
-# Normalize basin field: fill NaN, replace blanks
 _df = emissions_df['basin_associated_with_facility'].fillna('Unknown').astype(str).str.strip().replace('', 'Unknown')
 emissions_df['basin_associated_with_facility'] = _df.str.title()
 
-# Legend ordering
 fig1_segments = sorted(emissions_df['industry_segment'].unique())
 fig2_sources = sorted(emissions_df['reporting_category'].dropna().unique())
 
-# Year slider bounds
 year_min = emissions_df['reporting_year'].min()
 year_max = emissions_df['reporting_year'].max()
 
-# Basin dropdown options
 unique_basins = sorted(b for b in emissions_df['basin_associated_with_facility'].unique() if b != 'Unknown')
 basin_options = [{'label': 'All Basins', 'value': 'All'}] + \
                 [{'label': basin, 'value': basin} for basin in unique_basins] + \
                 [{'label': 'Unknown', 'value': 'Unknown'}]
 
-# App layout
 app.layout = html.Div([
     html.H1("U.S. EPA Methane Emissions Dashboard", style={"textAlign": "center", "fontFamily": "Arial", "fontSize": "36px", "color": "#2C3E50"}),
 
@@ -67,14 +60,12 @@ app.layout = html.Div([
     dcc.Graph(id='state-heatmap', style={'marginTop': '20px'})
 ])
 
-# Shared filter function
 def filter_df(selected_years, selected_basin):
     dff = emissions_df[(emissions_df['reporting_year'] >= selected_years[0]) & (emissions_df['reporting_year'] <= selected_years[1])]
     if selected_basin != 'All':
         dff = dff[dff['basin_associated_with_facility'] == selected_basin]
     return dff
 
-# Combined callback for all three figures
 @app.callback(
     Output('emissions-graph', 'figure'),
     Output('emissions-source-graph', 'figure'),
@@ -100,11 +91,30 @@ def update_all(selected_years, selected_basin):
     fig2.update_layout(barmode='stack', title='Methane Emissions vs. Company (Stacked by Emission Source)', xaxis_title='Company Name', yaxis_title='Methane Emissions (Total CH4 Emissions)', legend_title='Emission Source', height=500, margin=dict(t=60,b=200,l=40,r=40))
 
     # Figure 3: Heatmap by State
+
     m3 = dff.merge(facilities_df[['facility_id','state']], on='facility_id', how='left')
     g3 = m3.groupby(['state','reporting_category'])['total_reported_ch4_emissions'].sum().reset_index()
+
+    top_cats = g3.groupby('reporting_category')['total_reported_ch4_emissions'].sum().nlargest(15).index
+    g3 = g3[g3['reporting_category'].isin(top_cats)]
+
     p3 = g3.pivot(index='state', columns='reporting_category', values='total_reported_ch4_emissions').fillna(0)
-    fig3 = go.Figure(data=go.Heatmap(z=p3.values, x=p3.columns, y=p3.index, coloraxis='coloraxis'))
-    fig3.update_layout(title='Heat map of methane emissions by state', xaxis_title='Emission Source', yaxis_title='State', coloraxis_colorbar=dict(title='Emissions'), height=600, margin=dict(t=60,b=100,l=80,r=40))
+    z = np.log1p(p3.values)
+
+    fig3 = go.Figure(data=go.Heatmap(
+        z=z,
+        x=p3.columns,
+        y=p3.index,
+        coloraxis='coloraxis'
+    ))
+    fig3.update_layout(
+        title='Heat map of methane emissions by state',
+        xaxis_title='Emission Source', yaxis_title='State',
+        coloraxis_colorbar=dict(title='Log(Emissions+1)'),
+        width=1600, height=800,
+        xaxis=dict(tickangle=45, automargin=True),
+        margin=dict(t=80,b=200,l=120,r=100)
+    )
 
     return fig1, fig2, fig3
 
